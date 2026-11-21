@@ -3,6 +3,7 @@
 What changed in each version of SuperCI. The dashboard shows the entries your control plane does not have yet.
 
 ## 0.20.5
+- A job your control plane was never told of (its queued event lost), run on the machine started for another job, leaves that other job a machine of its own. GitHub gives a waiting job any idle runner with its label, so the machine went to a job that had none, the job it was for went on to take the next idle runner, and so on to the last job of the push, which stayed queued with no machine coming until it was cancelled (seen for 14 hours): the check for jobs never told of skips a job it has a record of. Update your control plane for it.
 - A dashboard left running keeps your sign-ins when another program is midway through writing them. It read the half-written file as every sign-in ended, and removed it.
 - Deleting a control plane takes its Cloudflare launcher out just after you signed in to Cloudflare again in a terminal. It was left in Cloudflare, and nothing said so. When Cloudflare does not list your accounts, the launcher is named among what was left.
 - A move bringing AWS runners to a Cloudflare control plane checks their account's sign-in before anything moves: one AWS ended stops it at once, said by its account. It stopped partway through.
