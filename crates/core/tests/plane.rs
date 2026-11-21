@@ -827,6 +827,32 @@ fn a_runner_that_takes_a_job_whose_machine_failed_leaves_its_own_job_a_new_machi
     assert_eq!((job(&store, 7)["state"].as_str(), job(&store, 8)["state"].as_str()), (Some("done"), Some("launched")));
 }
 
+#[test]
+fn a_job_never_told_of_that_takes_a_runner_leaves_that_runners_job_a_new_machine() {
+    let (store, clouds, wakes, cache, own) = (Mem::default(), FakeClouds::default(), Wakes::default(), Cache::default(), OwnContainers::default());
+    let mut config = Config::new(PLANE_ID.into());
+    config.app = Some(app());
+    config.containers = true;
+    let plane = ControlPlane { store: &store, http: &clouds, clock: &FixedClock, timer: &wakes, config: &config, cache: &cache, containers: Some(&own) };
+    let run = |r: Request| block_on(plane.handle(r));
+    let starts = || own.0.borrow().iter().filter(|c| c.starts_with("start")).count();
+    run(job_event("queued", 7, "acme/app", None));
+    run(job_event("queued", 8, "acme/app", None));
+    assert_eq!(starts(), 2);
+    // Job 9's queued event never came; GitHub gives it job 8's runner as soon as that one is idle.
+    let runner8 = format!("superci-{PLANE_ID}-8");
+    run(job_event("in_progress", 9, "acme/app", Some(&runner8)));
+    // Job 9 runs on that runner; job 8, which would otherwise wait with no machine coming, gets one of its own again.
+    assert_eq!((job(&store, 9)["state"].as_str(), job(&store, 9)["runner"].as_str()), (Some("running"), Some(runner8.as_str())));
+    assert_eq!((job(&store, 8)["state"].as_str(), starts()), (Some("launched"), 3));
+    // Job 9's queued event, arriving late, starts nothing more.
+    run(job_event("queued", 9, "acme/app", None));
+    assert_eq!((job(&store, 9)["state"].as_str(), starts()), (Some("running"), 3));
+    // Job 9 ends with that runner's machine; job 8 keeps its new one.
+    run(job_event("completed", 9, "acme/app", Some(&runner8)));
+    assert_eq!((job(&store, 9)["state"].as_str(), job(&store, 8)["state"].as_str()), (Some("done"), Some("launched")));
+}
+
 fn job(store: &Mem, id: u64) -> serde_json::Value { serde_json::from_str(&store.0.borrow()[&format!("job:{id}")]).unwrap() }
 
 fn own_aws() -> (Option<(String, String)>, Option<superci_core::aws::Credentials>) {
@@ -7592,6 +7618,7 @@ fn every_test_here_holds_with_each_call_and_store_operation_failing() {
         a_job_whose_machine_never_starts_while_github_cannot_be_asked_fails_here_alone,
         a_start_cut_off_midway_is_placed_again_by_the_sweep,
         a_runner_that_takes_a_job_whose_machine_failed_leaves_its_own_job_a_new_machine,
+        a_job_never_told_of_that_takes_a_runner_leaves_that_runners_job_a_new_machine,
         how_a_job_itself_ended_is_kept_apart_from_whether_a_machine_ran_it,
         an_app_renamed_on_github_is_known_by_its_new_address,
         jobs_boot_the_pinned_build_and_the_oldest_newer_one_once_it_is_gone,

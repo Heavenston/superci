@@ -2388,7 +2388,10 @@ impl<'a> ControlPlane<'a> {
         let Some(ev) = github::our_job_among(&payload, &self.config.labels(), &app.owner) else { return Ok(Response::text(202, "not ours")) };
         match ev.action.as_str() {
             "queued" => self.launch(plane_url, &ev, app).await?,
-            "in_progress" => self.started(plane_url, ev.job_id, ev.runner_name.as_deref()).await?,
+            "in_progress" => {
+                self.untold_started(&ev, app).await?;
+                self.started(plane_url, ev.job_id, ev.runner_name.as_deref()).await?
+            }
             "completed" => self.completed(plane_url, &ev).await?,
             _ => {}
         }
@@ -3003,12 +3006,33 @@ impl<'a> ControlPlane<'a> {
         }
     }
 
+    /// A job's record as its event tells of it, in `state`.
+    fn job_of(&self, ev: &github::JobEvent, app: &App, state: &str) -> Job {
+        Job { job_id: ev.job_id, run_id: ev.run_id, repo: ev.repo.clone(), state: state.into(), at_ms: self.clock.now_ms(), installation_id: ev.installation_id, label: ev.label.clone(),
+            name: ev.name.clone(), workflow: ev.workflow.clone(), app_id: Some(app.id), attempt: Some(ev.attempt).filter(|a| *a > 0), queued_ms: ev.created_ms,
+            repo_id: ev.repo_id, branch: ev.branch.clone(), default_branch: ev.default_branch.clone(), ..Default::default() }
+    }
+
+    /// A job that began on a runner of this control plane's, started for another job, and that this control plane was
+    /// never told of (its `queued` event lost, or not here yet): recorded now, "untold", with no machine of its own
+    /// coming, so that `started` makes that runner its machine and starts a new one for the job the runner was for.
+    /// Without it, that job's machine was gone and nothing knew: a later job took over the loss in turn, as GitHub
+    /// hands each waiting job the next idle runner, and the last one stayed queued until cancelled (the check for jobs
+    /// never told of skips a job with a record). A `queued` event arriving later finds the record and starts nothing.
+    async fn untold_started(&self, ev: &github::JobEvent, app: &App) -> Result<()> {
+        let key = format!("job:{}", ev.job_id);
+        if self.store.get(&key).await?.is_some() { return Ok(()) }
+        let Some(other) = self.by_runner(ev.runner_name.as_deref()).await? else { return Ok(()) };
+        if other.job_id == ev.job_id { return Ok(()) }
+        let job = self.job_of(ev, app, "untold");
+        if self.store.put_if_absent(&key, crate::io::json(&job)).await? { self.index_claim(&key, &job).await? }
+        Ok(())
+    }
+
     /// A queued job: claimed once, then started where the order says (or left waiting for room).
     async fn launch(&self, plane_url: &str, ev: &github::JobEvent, app: &App) -> Result<()> {
         let key = format!("job:{}", ev.job_id);
-        let mut job = Job { job_id: ev.job_id, run_id: ev.run_id, repo: ev.repo.clone(), state: "launching".into(), at_ms: self.clock.now_ms(), installation_id: ev.installation_id, label: ev.label.clone(),
-            name: ev.name.clone(), workflow: ev.workflow.clone(), app_id: Some(app.id), attempt: Some(ev.attempt).filter(|a| *a > 0), queued_ms: ev.created_ms,
-            repo_id: ev.repo_id, branch: ev.branch.clone(), default_branch: ev.default_branch.clone(), ..Default::default() };
+        let mut job = self.job_of(ev, app, "launching");
         // Claimed once, however many deliveries of the event arrive at once. A claim that never got past launching (the
         // runtime restarted mid-way) is taken over by a later delivery.
         if self.store.put_if_absent(&key, crate::io::json(&job)).await? { self.index_claim(&key, &job).await? } else {
