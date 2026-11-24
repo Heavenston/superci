@@ -62,7 +62,7 @@ if kind == "jobs":
     ns["time"] = mock.Mock(time=lambda: 1_790_000_000, sleep=lambda s: None, monotonic=lambda: clock[0])
     notice = "https://plane.example/interrupted?runner=superci-abc-7&t=0123456789abcdef"
     assert ns["run_job"]("J", None, notice) == {"exit": 0}
-    ns["subprocess"].Popen.assert_called_once_with(["/home/runner/run.sh", "--jitconfig", "J"], cwd="/home/runner", start_new_session=True)
+    ns["subprocess"].Popen.assert_called_once_with(ns["runner_command"]("J"), cwd="/home/runner", start_new_session=True)
     assert told == []
     assert ns["run_job"]("J", None, notice) == {"preempted": True}
     assert ns["subprocess"].Popen.call_count == 1, "no runner started again"

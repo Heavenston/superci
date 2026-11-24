@@ -33,13 +33,22 @@ warnings.showwarning = hear
 
 TRUST = json.loads(base64.b64decode("__TRUST__"))  # {"issuer", "subject", "keys": {"keys": [...]}}
 
+# Docker as on GitHub's machines: its daemon started first, and the runner started once it answers (a job's container
+# actions are built as soon as it starts), or once it has ended: it runs in a VM sandbox (`runtime`), not in gVisor.
+# The runner as the image's own user `runner`, as on GitHub's machines and SuperCI's AWS ones: its HOME (/home/runner,
+# where the paths of a cache saved on those machines are restored), sudo without a password and the docker group (the
+# image's sudoers give root no sudo); as root in an image without that user.
+START = ("if command -v dockerd >/dev/null; then dockerd >/tmp/dockerd.log 2>&1 & d=$!;"
+         " for i in $(seq 100); do docker info >/dev/null 2>&1 || ! kill -0 $d 2>/dev/null && break; sleep 0.2; done; fi; "
+         'as=; id -u runner >/dev/null 2>&1 && as="runuser -u runner --"; ')
+
+
 def runner_command(jit, fail=None):
     """GitHub's runner for one job; a failing runner (`fail`: base64 of why) gets a job-started hook that says why and
     fails the job before any step (both are base64, so safe on the command line)."""
-    if not fail:
-        return ["/home/runner/run.sh", "--jitconfig", jit]
-    return ["bash", "-c", f"printf '#!/bin/bash\\necho {fail} | base64 -d\\nexit 1\\n' > /tmp/superci-fail.sh && chmod 755 /tmp/superci-fail.sh"
-            f" && ACTIONS_RUNNER_HOOK_JOB_STARTED=/tmp/superci-fail.sh exec /home/runner/run.sh --jitconfig {jit}"]
+    hook = (f"printf '#!/bin/bash\\necho {fail} | base64 -d\\nexit 1\\n' > /tmp/superci-fail.sh && chmod 755 /tmp/superci-fail.sh"
+            " && export ACTIONS_RUNNER_HOOK_JOB_STARTED=/tmp/superci-fail.sh && ") if fail else ""
+    return ["bash", "-c", f"{START}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
 
 NAME = "__NAME__"
 
@@ -47,10 +56,11 @@ app = modal.App(NAME)
 web_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi[standard]==0.118.0", "cryptography==46.0.1")
 # GitHub's runner image; the runner refuses root unless told it may (sandboxes start as root). With what GitHub's own
 # runners have that it lacks and common actions use: xz and zstd (setup-zig's and others' archives, the cache's), zip,
-# jq, git, and a C compiler (a Rust or Node build links with it).
+# jq, git, a C compiler (a Rust or Node build links with it), and iptables (Docker's bridge network: the image's Docker
+# is its static build, without it).
 runner_image = (
     modal.Image.from_registry("ghcr.io/actions/actions-runner:latest")
-    .dockerfile_commands(["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config && rm -rf /var/lib/apt/lists/*"])
+    .dockerfile_commands(["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config iptables && rm -rf /var/lib/apt/lists/*"])
     .env({"RUNNER_ALLOW_RUNASROOT": "1"})
 )
 
@@ -190,6 +200,8 @@ def web():
                 # it is billed exactly that (Modal bills the higher of reserved and used).
                 cpu=(float(body.get("cpu") or 2) / 2,) * 2, memory=(int(body.get("ram_gb") or 8) * 1024,) * 2, timeout=int(body.get("max_minutes", 70)) * 60,
                 gpu=body.get("gpu"),  # one of Modal's ("T4", "L4", …), or none
+                # A VM, which runs Docker (see `START`); GPUs are only in gVisor.
+                runtime=None if body.get("gpu") else "vm",
             )
         except modal.exception.InvalidError as e:
             # Modal refuses what was asked (a GPU without a payment method on the workspace): said as it says it.
