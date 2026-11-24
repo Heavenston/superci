@@ -5223,7 +5223,7 @@ mark();load()})();</script>"#;
   image: node:24
   script:
     - npm test</pre>"#)),
-            step(3, sizes(r#"<p class="note step-note">GitLab jobs run on AWS and Cloudflare (Modal's sandboxes have no Docker). On Cloudflare, <code>services:</code> are on <code>localhost</code>.</p>"#)),
+            step(3, sizes(r#"<p class="note step-note">GitLab jobs run on AWS and Cloudflare, not on Modal. On Cloudflare, <code>services:</code> are on <code>localhost</code>.</p>"#)),
         ].concat();
         // Switching workflows with a coding agent: a prompt to copy (supercov's Improve, for runners).
         let switch = if gh_on || gl_on { agent_button("Switch workflows", "Switch workflows with a coding agent", "superciPrompt()") } else { String::new() };

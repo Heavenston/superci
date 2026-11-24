@@ -106,7 +106,7 @@ impl Sandboxes<'_> {
     /// As a preemptible Modal Function in place of a sandbox when `notice` is given: the link it says a preemption with.
     fn sandbox(&self, name: &str, work: &Work, max_minutes: u32, size: Size, image: Option<&str>, secret: Option<&str>, notice: Option<&str>) -> io::Result<String> {
         // Placement keeps GitLab jobs (Docker) away from Modal's sandboxes.
-        let (jit, fail) = match work { Work::GitHub { jit } => (jit, None), Work::Fail { jit, why } => (jit, Some(why)), Work::GitLab { .. } => return Err("Modal runs no Docker for GitLab jobs".into()) };
+        let (jit, fail) = match work { Work::GitHub { jit } => (jit, None), Work::Fail { jit, why } => (jit, Some(why)), Work::GitLab { .. } => return Err("Modal runs no GitLab jobs".into()) };
         let mut q = json!({ "op": "sandbox_start", "name": name, "jit": jit, "fail": fail, "max_minutes": max_minutes, "cpu": size.cpu, "ram_gb": size.ram_gb, "disk_gb": size.disk_gb, "gpu": size.gpu.map(str::to_uppercase), "image": image, "image_secret": secret });
         if let Some(n) = notice { q["function"] = true.into(); q["notice"] = n.into() }
         let a = self.0.ask(q)?;
@@ -199,6 +199,6 @@ mod tests {
         let bridge = Bridge::new();
         let work = Work::GitLab { url: "https://gitlab.com".into(), token: "glrt-x".into() };
         let said = block_on(Sandboxes(&bridge).start("superci-1", &work, 10, Size { cpu: 2, ram_gb: 8, disk_gb: 14, gpu: None }));
-        assert_eq!(said, Err("Modal runs no Docker for GitLab jobs".to_string()));
+        assert_eq!(said, Err("Modal runs no GitLab jobs".to_string()));
     }
 }

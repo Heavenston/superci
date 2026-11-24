@@ -70,7 +70,7 @@ Leave these jobs alone, each with a `# stays on GitHub: <why>` (or `# stays on G
 - jobs that need KVM or nested virtualisation;
 - on a public repository, fork pull requests and `pull_request_target`, which SuperCI refuses: `runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'superci' }}`. A public repository also has to be allowed first (`superci public_repos create OWNER/REPO`).
 
-For GitLab, tag jobs `superci` (replacing `saas-linux-*`, or once in `default: tags`): `superci/cpu=4` for medium, `superci/cpu=8` for large, `superci/cpu=16` for xlarge, `superci/arch=arm64` for arm64. Keep `image:` and `services:`. GitLab jobs run in Docker, so not on Modal.
+For GitLab, tag jobs `superci` (replacing `saas-linux-*`, or once in `default: tags`): `superci/cpu=4` for medium, `superci/cpu=8` for large, `superci/cpu=16` for xlarge, `superci/arch=arm64` for arm64. Keep `image:` and `services:`. GitLab jobs do not run on Modal.
 
 ## 6. Try it before pushing
 
