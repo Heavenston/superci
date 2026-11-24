@@ -55,9 +55,9 @@ def runner_command(jit, fail=None):
     return ["bash", "-c", f"{AS}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
 
 
-# GitHub's runner image, as a sandbox has it (but iptables: a Function has no VM, so no Docker), with Python (a
+# GitHub's runner image, as a sandbox has it (but iptables: a Function has no VM, so no Docker), gh included, with Python (a
 # Function's container runs Modal's Python in it).
-SETUP = ["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config && rm -rf /var/lib/apt/lists/*"]
+SETUP = ["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config && rm -rf /var/lib/apt/lists/*", "RUN mkdir -p -m 755 /etc/apt/keyrings && wget -qO /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg && echo 'deb [signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' > /etc/apt/sources.list.d/github-cli.list && apt-get update && apt-get install -y --no-install-recommends gh && rm -rf /var/lib/apt/lists/*"]
 NO_RUNNER = "test -x /home/runner/run.sh || { echo 'This image has no GitHub runner at /home/runner/run.sh: make it FROM ghcr.io/actions/actions-runner' >&2; exit 1; }"
 
 

@@ -84,11 +84,11 @@ image = (
 # GitHub's runner image; the runner refuses root unless told it may (it runs as root in an image without the user
 # `runner`). With what GitHub's own
 # runners have that it lacks and common actions use: xz and zstd (setup-zig's and others' archives, the cache's), zip,
-# jq, git, a C compiler (a Rust or Node build links with it), and iptables (Docker's bridge network: the image's Docker
-# is its static build, without it).
+# jq, git, a C compiler (a Rust or Node build links with it), iptables (Docker's bridge network: the image's Docker is
+# its static build, without it), and GitHub's CLI, gh (from its own apt repository, as GitHub's runners have it).
 runner_image = (
     modal.Image.from_registry("ghcr.io/actions/actions-runner:latest")
-    .dockerfile_commands(["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config iptables && rm -rf /var/lib/apt/lists/*"])
+    .dockerfile_commands(["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config iptables && rm -rf /var/lib/apt/lists/*", "RUN mkdir -p -m 755 /etc/apt/keyrings && wget -qO /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg && echo 'deb [signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' > /etc/apt/sources.list.d/github-cli.list && apt-get update && apt-get install -y --no-install-recommends gh && rm -rf /var/lib/apt/lists/*"])
     .env({"RUNNER_ALLOW_RUNASROOT": "1"})
 )
 
