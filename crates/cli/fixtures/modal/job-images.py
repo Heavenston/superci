@@ -55,17 +55,27 @@ with tempfile.TemporaryDirectory() as d:
     open(run, "w").write("#!/bin/sh\n"); os.chmod(run, 0o755)
     assert subprocess.run(["sh", "-c", NO_RUNNER.replace("/home/runner/run.sh", run)]).returncode == 0
 
-# The runner's start in a real shell: a dockerd that ends at once (gVisor's) holds it back no longer than that, and the
-# runner starts with the failing hook given; as root here, where there is no user `runner`.
+# The runner's start in a real shell, whatever the machine that runs this (stand-ins for `id -u runner`, setpriv,
+# dockerd and docker, first in PATH): as the user `runner` where the image has one, else as root; a dockerd that ends at
+# once (gVisor's) holds it back no longer than that, and its last words are said; a GPU's starts none; the failing hook
+# is given.
 with tempfile.TemporaryDirectory() as d:
-    for n, body in [("dockerd", "exit 1"), ("docker", "exit 1"), ("run.sh", 'echo "$(id -u) $ACTIONS_RUNNER_HOOK_JOB_STARTED $*"')]:
+    for n, body in [("id", '[ "$1 $2" = "-u runner" ] && { [ -n "$HAS_RUNNER" ]; exit; }; exec /usr/bin/id "$@"'),
+                    ("setpriv", 'shift 3; echo "as runner"; exec "$@"'),
+                    ("dockerd", 'echo "dockerd said no"; touch "$MARK"; exit 1'), ("docker", "exit 1"),
+                    ("run.sh", 'echo "$HOME $ACTIONS_RUNNER_HOOK_JOB_STARTED $*"')]:
         open(os.path.join(d, n), "w").write("#!/bin/sh\n" + body + "\n"); os.chmod(os.path.join(d, n), 0o755)
-    for fail, hook in [(None, ""), ("d2h5", "/tmp/superci-fail.sh")]:
-        command = [a.replace("/home/runner/run.sh", os.path.join(d, "run.sh")) for a in ns["runner_command"]("J", fail)]
+    mark = os.path.join(d, "dockerd-started")
+    for fail, docker, has_runner in [(None, True, ""), ("d2h5", True, "1"), (None, False, "1")]:
+        command = [a.replace("/tmp/", d + "/").replace("/home/runner/run.sh", os.path.join(d, "run.sh")) for a in ns["runner_command"]("J", fail, docker)]
+        env = {"PATH": d + ":/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/root", "HAS_RUNNER": has_runner, "MARK": mark}
         started = time.monotonic()
-        ran = subprocess.run(command, capture_output=True, text=True, env={"PATH": d + ":/usr/bin:/bin:/usr/sbin:/sbin"}, timeout=10)
-        assert ran.returncode == 0 and ran.stdout.split() == [str(os.getuid())] + ([hook] if hook else []) + ["--jitconfig", "J"], ran
+        ran = subprocess.run(command, capture_output=True, text=True, env=env, timeout=10)
+        said = (["as", "runner", "/home/runner"] if has_runner else ["/root"]) + ([os.path.join(d, "superci-fail.sh")] if fail else []) + ["--jitconfig", "J"]
+        assert ran.returncode == 0 and ran.stdout.split() == said, ran
+        assert os.path.exists(mark) == docker and (("Docker did not start" in ran.stderr and "dockerd said no" in ran.stderr) == docker), ran
         assert time.monotonic() - started < 5, "a dockerd that ended held the runner back"
+        if os.path.exists(mark): os.remove(mark)
 
 # What Modal says of an image it could not make is said with the image; a build cut short is not (it is tried again).
 assert "ghcr.io/acme/ci:1" in image_refused("ghcr.io/acme/ci:1", RemoteError("Image build for im-1 failed. See build logs for more details."))
@@ -106,7 +116,7 @@ for image in [None, "ghcr.io/acme/ci:1"]:
     else:
         modal.Image.from_registry.assert_not_called()
 call, _ = launched(None, gpu="T4")
-assert call.kwargs["gpu"] == "T4" and call.kwargs["runtime"] is None, call
+assert call.kwargs["gpu"] == "T4" and call.kwargs["runtime"] is None and call.args == tuple(ns["runner_command"]("J", None, False)), call
 # An image Modal could not make fails the job, saying why; the same with no image of its own is Modal's to say.
 _, said = launched(RemoteError("Image build for im-1 failed. See build logs for more details."), image="ghcr.io/acme/ci:1")
 assert said["error"].startswith("Modal could not start from the image ghcr.io/acme/ci:1:") and said.get("status", 400) == 400, said

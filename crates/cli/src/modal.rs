@@ -849,7 +849,7 @@ def say(*a): print(*a, file=sys.stderr, flush=True)
 app = modal.App.lookup("superci-leaktest", create_if_missing=True)
 d = modal.Dict.from_name("superci-leaktest-probe", create_if_missing=True)
 d["secret"] = "visible"
-probe = modal.Sandbox.create("python", "-c", "import modal\ntry:\n    print('PROBE read:', modal.Dict.from_name('superci-leaktest-probe').get('secret'))\nexcept Exception as e:\n    print('PROBE blocked:', type(e).__name__, str(e)[:160])", app=app, image=modal.Image.debian_slim().pip_install("modal==__MODAL_CLIENT__"), timeout=300)
+probe = modal.Sandbox.create("python", "-c", "import modal\ntry:\n    print('PROBE read:', modal.Dict.from_name('superci-leaktest-probe').get('secret'))\nexcept Exception as e:\n    print('PROBE blocked:', type(e).__name__, str(e)[:160])", app=app, image=modal.Image.debian_slim().pip_install("modal==__MODAL_CLIENT__"), timeout=300, runtime="vm")
 probe.wait(raise_on_termination=False)
 say(probe.stdout.read().strip())
 try:
@@ -859,7 +859,7 @@ except Exception as e:
 image = modal.Image.from_registry("ghcr.io/actions/actions-runner:latest").env({"RUNNER_ALLOW_RUNASROOT": "1"})
 t0 = time.time()
 # As the control plane starts one for a 1-CPU job: half a physical core, held to what it asks for.
-sb = modal.Sandbox.create("/home/runner/run.sh", "--jitconfig", os.environ["JIT"], app=app, image=image, workdir="/home/runner", cpu=(0.5, 0.5), memory=(2048, 2048), timeout=180)
+sb = modal.Sandbox.create("/home/runner/run.sh", "--jitconfig", os.environ["JIT"], app=app, image=image, workdir="/home/runner", cpu=(0.5, 0.5), memory=(2048, 2048), timeout=180, runtime="vm")
 say("BOUND started", sb.object_id)
 try:
     sb.wait(raise_on_termination=False)

@@ -43,7 +43,8 @@ def function_name(reference=None, secret=None):
 # The runner as the image's own user `runner`, as on GitHub's machines and SuperCI's AWS ones: its HOME (/home/runner,
 # where the paths of a cache saved on those machines are restored), sudo without a password and the docker group (the
 # image's sudoers give root no sudo); as root in an image without that user.
-START = 'as=; id -u runner >/dev/null 2>&1 && as="runuser -u runner --"; '
+# (setpriv, not runuser or sudo: no PAM session, which a container may refuse.)
+AS = 'as=; id -u runner >/dev/null 2>&1 && as="setpriv --reuid=runner --regid=runner --init-groups env HOME=/home/runner USER=runner LOGNAME=runner"; '
 
 
 def runner_command(jit, fail=None):
@@ -51,11 +52,12 @@ def runner_command(jit, fail=None):
     fails the job before any step (both are base64, so safe on the command line)."""
     hook = (f"printf '#!/bin/bash\\necho {fail} | base64 -d\\nexit 1\\n' > /tmp/superci-fail.sh && chmod 755 /tmp/superci-fail.sh"
             " && export ACTIONS_RUNNER_HOOK_JOB_STARTED=/tmp/superci-fail.sh && ") if fail else ""
-    return ["bash", "-c", f"{START}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
+    return ["bash", "-c", f"{AS}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
 
 
-# GitHub's runner image, as a sandbox has it, with Python (a Function's container runs Modal's Python in it).
-SETUP = ["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config iptables && rm -rf /var/lib/apt/lists/*"]
+# GitHub's runner image, as a sandbox has it (but iptables: a Function has no VM, so no Docker), with Python (a
+# Function's container runs Modal's Python in it).
+SETUP = ["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config && rm -rf /var/lib/apt/lists/*"]
 NO_RUNNER = "test -x /home/runner/run.sh || { echo 'This image has no GitHub runner at /home/runner/run.sh: make it FROM ghcr.io/actions/actions-runner' >&2; exit 1; }"
 
 

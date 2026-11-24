@@ -34,27 +34,32 @@ warnings.showwarning = hear
 TRUST = json.loads(base64.b64decode("__TRUST__"))  # {"issuer", "subject", "keys": {"keys": [...]}}
 
 # Docker as on GitHub's machines: its daemon started first, and the runner started once it answers (a job's container
-# actions are built as soon as it starts), or once it has ended: it runs in a VM sandbox (`runtime`), not in gVisor.
+# actions are built as soon as it starts), or once it has ended, its last words said: it runs in a VM sandbox (`runtime`),
+# not in gVisor.
 # The runner as the image's own user `runner`, as on GitHub's machines and SuperCI's AWS ones: its HOME (/home/runner,
 # where the paths of a cache saved on those machines are restored), sudo without a password and the docker group (the
 # image's sudoers give root no sudo); as root in an image without that user.
-START = ("if command -v dockerd >/dev/null; then dockerd >/tmp/dockerd.log 2>&1 & d=$!;"
-         " for i in $(seq 100); do docker info >/dev/null 2>&1 || ! kill -0 $d 2>/dev/null && break; sleep 0.2; done; fi; "
-         'as=; id -u runner >/dev/null 2>&1 && as="runuser -u runner --"; ')
+DOCKER = ("if command -v dockerd >/dev/null; then dockerd >/tmp/dockerd.log 2>&1 & d=$!; for i in $(seq 100); do"
+          " timeout 3 docker info >/dev/null 2>&1 && break; kill -0 $d 2>/dev/null"
+          " || { echo 'superci: Docker did not start:' >&2; tail -n 20 /tmp/dockerd.log >&2; break; }; sleep 0.2; done; fi; ")
+# (setpriv, not runuser or sudo: no PAM session, which a container may refuse.)
+AS = 'as=; id -u runner >/dev/null 2>&1 && as="setpriv --reuid=runner --regid=runner --init-groups env HOME=/home/runner USER=runner LOGNAME=runner"; '
 
 
-def runner_command(jit, fail=None):
-    """GitHub's runner for one job; a failing runner (`fail`: base64 of why) gets a job-started hook that says why and
-    fails the job before any step (both are base64, so safe on the command line)."""
+def runner_command(jit, fail=None, docker=True):
+    """GitHub's runner for one job, after Docker's daemon unless `docker` is False (a GPU's sandbox, in gVisor); a
+    failing runner (`fail`: base64 of why) gets a job-started hook that says why and fails the job before any step
+    (both are base64, so safe on the command line)."""
     hook = (f"printf '#!/bin/bash\\necho {fail} | base64 -d\\nexit 1\\n' > /tmp/superci-fail.sh && chmod 755 /tmp/superci-fail.sh"
             " && export ACTIONS_RUNNER_HOOK_JOB_STARTED=/tmp/superci-fail.sh && ") if fail else ""
-    return ["bash", "-c", f"{START}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
+    return ["bash", "-c", f"{DOCKER if docker else ''}{AS}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
 
 NAME = "__NAME__"
 
 app = modal.App(NAME)
 web_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi[standard]==0.118.0", "cryptography==46.0.1")
-# GitHub's runner image; the runner refuses root unless told it may (sandboxes start as root). With what GitHub's own
+# GitHub's runner image; the runner refuses root unless told it may (it runs as root in an image without the user
+# `runner`). With what GitHub's own
 # runners have that it lacks and common actions use: xz and zstd (setup-zig's and others' archives, the cache's), zip,
 # jq, git, a C compiler (a Rust or Node build links with it), and iptables (Docker's bridge network: the image's Docker
 # is its static build, without it).
@@ -184,8 +189,8 @@ def web():
     @api.post("/launch")
     async def launch(request: Request):
         body = await check(request)
-        if "jit" not in body:  # GitLab's jobs run in Docker, which Modal's sandboxes do not have
-            raise HTTPException(status_code=400, detail="Modal runs no Docker for GitLab jobs")
+        if "jit" not in body:  # GitLab's jobs are not run on Modal
+            raise HTTPException(status_code=400, detail="Modal runs no GitLab jobs")
         if body.get("function"):
             id, error = await start_function(FUNCTIONS, body, float(body.get("cpu") or 2), int(body.get("ram_gb") or 8), int(body.get("max_minutes", 70)), body.get("gpu"))
             if error:
@@ -194,13 +199,13 @@ def web():
             return {"id": id, "kind": "function", "image": body.get("image")}
         try:
             sandbox = await modal.Sandbox.create.aio(
-                *runner_command(body["jit"], body.get("fail")),
+                *runner_command(body["jit"], body.get("fail"), docker=not body.get("gpu")),
                 app=app, image=job_image(body.get("image"), body.get("image_secret")), workdir="/home/runner",
                 # CPUs as GitHub counts them (vCPUs); Modal's are physical cores of two each. Held to what it asks for, so
                 # it is billed exactly that (Modal bills the higher of reserved and used).
                 cpu=(float(body.get("cpu") or 2) / 2,) * 2, memory=(int(body.get("ram_gb") or 8) * 1024,) * 2, timeout=int(body.get("max_minutes", 70)) * 60,
                 gpu=body.get("gpu"),  # one of Modal's ("T4", "L4", …), or none
-                # A VM, which runs Docker (see `START`); GPUs are only in gVisor.
+                # A VM, which runs Docker (see `DOCKER`); GPUs are only in gVisor, which does not.
                 runtime=None if body.get("gpu") else "vm",
             )
         except modal.exception.InvalidError as e:

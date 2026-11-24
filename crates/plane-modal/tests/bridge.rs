@@ -176,7 +176,7 @@ fn the_control_plane_answers_plane_py_keeps_its_dict_and_starts_sandboxes_as_mod
     let (_, hook) = gh.queue("odd", "acmeci/cpu=banana", now_ms());
     py.deliver(request("POST", "/webhook", json!({ "x-github-event": "workflow_job", "x-hub-signature-256": hook.1 }), &hook.0, &secrets)).unwrap();
     assert!(py.asked.iter().any(|q| q["op"] == "sandbox_start" && q["fail"].is_string()), "{:?}", py.ops());
-    // A GitLab job: no sandbox (Modal runs no Docker).
+    // A GitLab job: no sandbox (Modal runs no GitLab jobs).
     let lab = GitLab::default();
     let (_, pending) = lab.pending("gl-test", &["acmeci"], now_ms());
     let before = py.ops().iter().filter(|o| *o == "sandbox_start").count();

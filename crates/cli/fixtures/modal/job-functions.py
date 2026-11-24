@@ -63,6 +63,9 @@ if kind == "jobs":
     notice = "https://plane.example/interrupted?runner=superci-abc-7&t=0123456789abcdef"
     assert ns["run_job"]("J", None, notice) == {"exit": 0}
     ns["subprocess"].Popen.assert_called_once_with(ns["runner_command"]("J"), cwd="/home/runner", start_new_session=True)
+    # As the user `runner` (its HOME, sudo, docker group), with no Docker to start: a Function has no VM.
+    command = ns["subprocess"].Popen.call_args.args[0]
+    assert command[:2] == ["bash", "-c"] and "setpriv --reuid=runner" in command[2] and "dockerd" not in command[2] and command[2].endswith("exec $as /home/runner/run.sh --jitconfig J"), command
     assert told == []
     assert ns["run_job"]("J", None, notice) == {"preempted": True}
     assert ns["subprocess"].Popen.call_count == 1, "no runner started again"

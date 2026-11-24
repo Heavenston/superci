@@ -12283,7 +12283,7 @@ mod gitlab_in_browser {
         // Modal's sandboxes beside Cloudflare's containers: neither runs Docker for GitLab on Windows, and Modal runs none.
         let served = serve(|c| { c.containers = true; c.launchers = vec![superci_core::plane::Launcher { cloud: "modal".into(), url: "https://acme--superci-runners.modal.run".into() }]; });
         served.connect_gitlab();
-        for (tags, why) in [(&["superci/os=windows"][..], "runs no GitLab jobs on Windows"), (&["superci/provider=modal"], "Modal runs no Docker")] {
+        for (tags, why) in [(&["superci/os=windows"][..], "runs no GitLab jobs on Windows"), (&["superci/provider=modal"], "Modal runs no GitLab jobs")] {
             let (id, pending) = served.gitlab.pending("test", tags, served.now_ms());
             assert!(served.gitlab_webhook(pending) < 300);
             let job = served.store.under(&format!("job:gl{id}")).into_iter().next().map(|(_, j)| j).unwrap_or_default();
@@ -17041,7 +17041,7 @@ fn jobs_through_cloudflare_and_modal_launchers_start_stop_and_are_refused_as_eac
         assert!(served.webhook(served.github.start(id)) < 300);
         assert!(served.webhook(served.github.finish(id, "success", "2026-10-15T10:00:01.0000000Z ok", served.now_ms())) < 300);
     }
-    // A GitLab job: not on Modal (it runs no Docker); on Cloudflare.
+    // A GitLab job: not on Modal (it runs no GitLab jobs); on Cloudflare.
     let (gl, p) = served.gitlab.pending("gitlab", &["superci/provider=modal"], served.now_ms());
     assert!(served.gitlab_webhook(p) < 300);
     // Both launchers refusing what the job asks: it fails at once, saying each.
