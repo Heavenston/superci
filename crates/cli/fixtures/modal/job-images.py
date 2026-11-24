@@ -56,12 +56,13 @@ with tempfile.TemporaryDirectory() as d:
     assert subprocess.run(["sh", "-c", NO_RUNNER.replace("/home/runner/run.sh", run)]).returncode == 0
 
 # The runner's start in a real shell, whatever the machine that runs this (stand-ins for `id -u runner`, setpriv,
-# dockerd and docker, first in PATH): as the user `runner` where the image has one, else as root; a dockerd that ends at
-# once (gVisor's) holds it back no longer than that, and its last words are said; a GPU's starts none; the failing hook
-# is given.
+# dockerd, docker and tini, first in PATH): under tini, once; as the user `runner` where the image has one, else as
+# root; a dockerd that ends at once (gVisor's) holds it back no longer than that, and its last words are said; a GPU's
+# starts none; the failing hook is given.
 with tempfile.TemporaryDirectory() as d:
     for n, body in [("id", '[ "$1 $2" = "-u runner" ] && { [ -n "$HAS_RUNNER" ]; exit; }; exec /usr/bin/id "$@"'),
                     ("setpriv", 'shift 3; echo "as runner"; exec "$@"'),
+                    ("tini", 'while [ "$1" != -- ]; do shift; done; shift; echo "under tini"; exec "$@"'),
                     ("dockerd", 'echo "dockerd said no"; touch "$MARK"; exit 1'), ("docker", "exit 1"),
                     ("run.sh", 'echo "$HOME $ACTIONS_RUNNER_HOOK_JOB_STARTED $*"')]:
         open(os.path.join(d, n), "w").write("#!/bin/sh\n" + body + "\n"); os.chmod(os.path.join(d, n), 0o755)
@@ -71,7 +72,7 @@ with tempfile.TemporaryDirectory() as d:
         env = {"PATH": d + ":/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/root", "HAS_RUNNER": has_runner, "MARK": mark}
         started = time.monotonic()
         ran = subprocess.run(command, capture_output=True, text=True, env=env, timeout=10)
-        said = (["as", "runner", "/home/runner"] if has_runner else ["/root"]) + ([os.path.join(d, "superci-fail.sh")] if fail else []) + ["--jitconfig", "J"]
+        said = ["under", "tini"] + (["as", "runner", "/home/runner"] if has_runner else ["/root"]) + ([os.path.join(d, "superci-fail.sh")] if fail else []) + ["--jitconfig", "J"]
         assert ran.returncode == 0 and ran.stdout.split() == said, ran
         assert os.path.exists(mark) == docker and (("Docker did not start" in ran.stderr and "dockerd said no" in ran.stderr) == docker), ran
         assert time.monotonic() - started < 5, "a dockerd that ended held the runner back"
