@@ -42,6 +42,17 @@ TRUST = json.loads(base64.b64decode("__TRUST__"))  # {"issuer", "subject", "keys
 DOCKER = ("if command -v dockerd >/dev/null; then dockerd >/tmp/dockerd.log 2>&1 & d=$!; for i in $(seq 100); do"
           " timeout 3 docker info >/dev/null 2>&1 && break; kill -0 $d 2>/dev/null"
           " || { echo 'superci: Docker did not start:' >&2; tail -n 20 /tmp/dockerd.log >&2; break; }; sleep 0.2; done; fi; ")
+# The runner under tini, a subreaper (as GitHub's and AWS's machines have systemd): a process orphaned in a job (a
+# server started with setsid, then killed) is reaped, not left a zombie that `kill -0` still finds, which made a job's
+# wait for it never end. Once (`SUPERCI_REAPED`), and not in an image without tini.
+REAP = ('[ -n "$SUPERCI_REAPED" ] || ! command -v tini >/dev/null'
+        ' || SUPERCI_REAPED=1 exec tini -s -g -- bash -c "$BASH_EXECUTION_STRING"; ')
+# /etc/hosts as on GitHub's machines, kept: Modal writes its own when the sandbox starts and again while it runs
+# (`127.0.0.1 localhost` and its address, no `::1 localhost`), which dropped what a job had added (a host of its own on
+# ::1). It gets GitHub's `::1` line, and every line it has held is put back while the runner (`$$`, once exec'd) runs.
+HOSTS = ("(h=/etc/hosts; k=/tmp/superci-hosts; grep -qE '^::1[[:space:]].*localhost' $h || echo '::1 localhost ip6-localhost ip6-loopback' >> $h;"
+         " touch $k; while kill -0 $$ 2>/dev/null; do grep -vxFf $h $k >> $h; sort -u $h $k -o $k.n && mv $k.n $k; sleep 0.5; done) </dev/null >/dev/null 2>&1 & ")
+
 # (setpriv, not runuser or sudo: no PAM session, which a container may refuse.)
 AS = 'as=; id -u runner >/dev/null 2>&1 && as="setpriv --reuid=runner --regid=runner --init-groups env HOME=/home/runner USER=runner LOGNAME=runner"; '
 
@@ -52,7 +63,7 @@ def runner_command(jit, fail=None, docker=True):
     (both are base64, so safe on the command line)."""
     hook = (f"printf '#!/bin/bash\\necho {fail} | base64 -d\\nexit 1\\n' > /tmp/superci-fail.sh && chmod 755 /tmp/superci-fail.sh"
             " && export ACTIONS_RUNNER_HOOK_JOB_STARTED=/tmp/superci-fail.sh && ") if fail else ""
-    return ["bash", "-c", f"{DOCKER if docker else ''}{AS}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
+    return ["bash", "-c", f"{REAP}{HOSTS}{DOCKER if docker else ''}{AS}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
 
 NAME = "__NAME__"
 
@@ -62,10 +73,11 @@ web_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi[
 # `runner`). With what GitHub's own
 # runners have that it lacks and common actions use: xz and zstd (setup-zig's and others' archives, the cache's), zip,
 # jq, git, a C compiler (a Rust or Node build links with it), iptables (Docker's bridge network: the image's Docker is
-# its static build, without it), and GitHub's CLI, gh (from its own apt repository, as GitHub's runners have it).
+# its static build, without it), tini (see `REAP`), and GitHub's CLI, gh (from its own apt repository, as GitHub's
+# runners have it).
 runner_image = (
     modal.Image.from_registry("ghcr.io/actions/actions-runner:latest")
-    .dockerfile_commands(["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config iptables && rm -rf /var/lib/apt/lists/*", "RUN mkdir -p -m 755 /etc/apt/keyrings && wget -qO /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg && echo 'deb [signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' > /etc/apt/sources.list.d/github-cli.list && apt-get update && apt-get install -y --no-install-recommends gh && rm -rf /var/lib/apt/lists/*"])
+    .dockerfile_commands(["USER root", "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils zstd zip unzip jq git wget build-essential pkg-config iptables tini && rm -rf /var/lib/apt/lists/*", "RUN mkdir -p -m 755 /etc/apt/keyrings && wget -qO /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg && echo 'deb [signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' > /etc/apt/sources.list.d/github-cli.list && apt-get update && apt-get install -y --no-install-recommends gh && rm -rf /var/lib/apt/lists/*"])
     .env({"RUNNER_ALLOW_RUNASROOT": "1"})
 )
 
