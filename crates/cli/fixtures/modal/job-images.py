@@ -58,24 +58,31 @@ with tempfile.TemporaryDirectory() as d:
 # The runner's start in a real shell, whatever the machine that runs this (stand-ins for `id -u runner`, setpriv,
 # dockerd, docker and tini, first in PATH): under tini, once; as the user `runner` where the image has one, else as
 # root; a dockerd that ends at once (gVisor's) holds it back no longer than that, and its last words are said; a GPU's
-# starts none; the failing hook is given.
+# starts none; the failing hook is given. /etc/hosts (a file here) gets `::1 localhost`, and a line the job added is
+# put back when the file is written anew (as Modal does).
 with tempfile.TemporaryDirectory() as d:
     for n, body in [("id", '[ "$1 $2" = "-u runner" ] && { [ -n "$HAS_RUNNER" ]; exit; }; exec /usr/bin/id "$@"'),
                     ("setpriv", 'shift 3; echo "as runner"; exec "$@"'),
                     ("tini", 'while [ "$1" != -- ]; do shift; done; shift; echo "under tini"; exec "$@"'),
                     ("dockerd", 'echo "dockerd said no"; touch "$MARK"; exit 1'), ("docker", "exit 1"),
-                    ("run.sh", 'echo "$HOME $ACTIONS_RUNNER_HOOK_JOB_STARTED $*"')]:
+                    ("run.sh", 'echo "$HOME $ACTIONS_RUNNER_HOOK_JOB_STARTED $*"; [ -z "$REWRITE" ] && exit; sleep 0.3;'
+                               ' echo "::1 e2e.localhost" >> "$HOSTS"; sleep 1.2; echo "127.0.0.1 localhost" > "$HOSTS"; sleep 1.2; cat "$HOSTS" >&2')]:
         open(os.path.join(d, n), "w").write("#!/bin/sh\n" + body + "\n"); os.chmod(os.path.join(d, n), 0o755)
-    mark = os.path.join(d, "dockerd-started")
-    for fail, docker, has_runner in [(None, True, ""), ("d2h5", True, "1"), (None, False, "1")]:
-        command = [a.replace("/tmp/", d + "/").replace("/home/runner/run.sh", os.path.join(d, "run.sh")) for a in ns["runner_command"]("J", fail, docker)]
-        env = {"PATH": d + ":/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/root", "HAS_RUNNER": has_runner, "MARK": mark}
+    mark, hosts = os.path.join(d, "dockerd-started"), os.path.join(d, "hosts")
+    for fail, docker, has_runner, rewrite in [(None, True, "", ""), ("d2h5", True, "1", ""), (None, False, "1", "1")]:
+        open(hosts, "w").write("127.0.0.1 localhost\n")
+        command = [a.replace("/tmp/", d + "/").replace("/etc/hosts", hosts).replace("/home/runner/run.sh", os.path.join(d, "run.sh")) for a in ns["runner_command"]("J", fail, docker)]
+        env = {"PATH": d + ":/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/root", "HAS_RUNNER": has_runner, "MARK": mark, "HOSTS": hosts, "REWRITE": rewrite}
         started = time.monotonic()
         ran = subprocess.run(command, capture_output=True, text=True, env=env, timeout=10)
         said = ["under", "tini"] + (["as", "runner", "/home/runner"] if has_runner else ["/root"]) + ([os.path.join(d, "superci-fail.sh")] if fail else []) + ["--jitconfig", "J"]
         assert ran.returncode == 0 and ran.stdout.split() == said, ran
         assert os.path.exists(mark) == docker and (("Docker did not start" in ran.stderr and "dockerd said no" in ran.stderr) == docker), ran
-        assert time.monotonic() - started < 5, "a dockerd that ended held the runner back"
+        assert time.monotonic() - started < 5 + 3 * bool(rewrite), "a dockerd that ended held the runner back"
+        assert "::1 localhost ip6-localhost ip6-loopback" in open(hosts).read().splitlines(), open(hosts).read()
+        if rewrite:
+            kept = ran.stderr.splitlines()
+            assert "::1 e2e.localhost" in kept and "::1 localhost ip6-localhost ip6-loopback" in kept, ran
         if os.path.exists(mark): os.remove(mark)
 
 # What Modal says of an image it could not make is said with the image; a build cut short is not (it is tried again).

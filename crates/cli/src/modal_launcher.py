@@ -47,6 +47,12 @@ DOCKER = ("if command -v dockerd >/dev/null; then dockerd >/tmp/dockerd.log 2>&1
 # wait for it never end. Once (`SUPERCI_REAPED`), and not in an image without tini.
 REAP = ('[ -n "$SUPERCI_REAPED" ] || ! command -v tini >/dev/null'
         ' || SUPERCI_REAPED=1 exec tini -s -g -- bash -c "$BASH_EXECUTION_STRING"; ')
+# /etc/hosts as on GitHub's machines, kept: Modal writes its own when the sandbox starts and again while it runs
+# (`127.0.0.1 localhost` and its address, no `::1 localhost`), which dropped what a job had added (a host of its own on
+# ::1). It gets GitHub's `::1` line, and every line it has held is put back while the runner (`$$`, once exec'd) runs.
+HOSTS = ("(h=/etc/hosts; k=/tmp/superci-hosts; grep -qE '^::1[[:space:]].*localhost' $h || echo '::1 localhost ip6-localhost ip6-loopback' >> $h;"
+         " touch $k; while kill -0 $$ 2>/dev/null; do grep -vxFf $h $k >> $h; sort -u $h $k -o $k.n && mv $k.n $k; sleep 0.5; done) </dev/null >/dev/null 2>&1 & ")
+
 # (setpriv, not runuser or sudo: no PAM session, which a container may refuse.)
 AS = 'as=; id -u runner >/dev/null 2>&1 && as="setpriv --reuid=runner --regid=runner --init-groups env HOME=/home/runner USER=runner LOGNAME=runner"; '
 
@@ -57,7 +63,7 @@ def runner_command(jit, fail=None, docker=True):
     (both are base64, so safe on the command line)."""
     hook = (f"printf '#!/bin/bash\\necho {fail} | base64 -d\\nexit 1\\n' > /tmp/superci-fail.sh && chmod 755 /tmp/superci-fail.sh"
             " && export ACTIONS_RUNNER_HOOK_JOB_STARTED=/tmp/superci-fail.sh && ") if fail else ""
-    return ["bash", "-c", f"{REAP}{DOCKER if docker else ''}{AS}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
+    return ["bash", "-c", f"{REAP}{HOSTS}{DOCKER if docker else ''}{AS}{hook}exec $as /home/runner/run.sh --jitconfig {jit}"]
 
 NAME = "__NAME__"
 
